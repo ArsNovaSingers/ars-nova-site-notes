@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Ars Nova Site Notes
  * Description: In-context, per-page notes & change tasks for both the FRONT END and the WP-ADMIN back end. Logged-in admins/editors open a notepad on any page or admin screen (e.g. the Season Dashboard and singer dashboards), add prioritized (1-10) checklist items, optionally link a note to an element with a drag target-line, and check items off. All notes roll up into a Site Notes admin screen (filterable by front-end vs back-end) for review and tracker sync.
- * Version: 1.1.0
+ * Version: 1.3.0
  * Author: Ars Nova (Jonathan Raabe)
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -10,13 +10,82 @@
 
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
-define( 'ANSN_VERSION', '1.1.0' );
+define( 'ANSN_VERSION', '1.3.0' );
 define( 'ANSN_URL', plugin_dir_url( __FILE__ ) );
 define( 'ANSN_PATH', plugin_dir_path( __FILE__ ) );
 
 /** Capability required to use Site Notes. Filterable so a custom role can be granted. */
 function ansn_cap() {
 	return apply_filters( 'ansn_capability', 'edit_posts' );
+}
+
+/* -------------------------------------------------------------------------
+ * "Send to Claude" configuration
+ *
+ * Each note gets a button that opens Claude Desktop on a new Cowork task with
+ * the note pre-written into the composer, via the documented deep link
+ * claude://cowork/new?q=<prompt>&folder=<absolute path>.
+ *
+ * The folder is machine-specific (it is a path on the marketing lead's own PC),
+ * so it lives in an option rather than being hard-coded. If it is blank we fall
+ * back to claude://claude.ai/new?q=<prompt>, which needs no folder at all.
+ * ---------------------------------------------------------------------- */
+define( 'ANSN_DEFAULT_FOLDER', 'C:\\Users\\jonra\\Claud Projects\\Ars Nova\\Ars Nova' );
+
+function ansn_claude_config() {
+	$label = get_option( 'ansn_site_label', '' );
+	if ( '' === $label ) {
+		$host  = wp_parse_url( home_url(), PHP_URL_HOST );
+		$label = ( false !== strpos( (string) $host, 'kinsta.cloud' ) ) ? 'DEV' : 'LIVE';
+	}
+	return array(
+		'folder'    => get_option( 'ansn_claude_folder', ANSN_DEFAULT_FOLDER ),
+		'branch'    => get_option( 'ansn_claude_branch', 'Website' ),
+		'siteLabel' => $label,
+		'home'      => home_url(),
+		'notesUrl'  => admin_url( 'admin.php?page=ans-site-notes' ),
+	);
+}
+
+add_action( 'admin_init', function () {
+	register_setting( 'ansn_settings', 'ansn_claude_folder', array( 'sanitize_callback' => 'sanitize_text_field' ) );
+	register_setting( 'ansn_settings', 'ansn_claude_branch', array( 'sanitize_callback' => 'sanitize_text_field' ) );
+	register_setting( 'ansn_settings', 'ansn_site_label',    array( 'sanitize_callback' => 'sanitize_text_field' ) );
+} );
+
+function ansn_render_settings_page() {
+	$cfg = ansn_claude_config();
+	echo '<div class="wrap"><h1>Site Notes Settings</h1>';
+	echo '<p class="description">Controls the <strong>&rarr; Claude</strong> button on each note. The button opens Claude Desktop on a new Cowork task with the note already written out. It only works on a computer that has Claude Desktop installed.</p>';
+	echo '<form method="post" action="options.php">';
+	settings_fields( 'ansn_settings' );
+	echo '<table class="form-table" role="presentation"><tbody>';
+
+	echo '<tr><th scope="row"><label for="ansn_claude_folder">Project folder on your computer</label></th><td>';
+	printf(
+		'<input name="ansn_claude_folder" id="ansn_claude_folder" type="text" class="regular-text code" value="%s" />',
+		esc_attr( get_option( 'ansn_claude_folder', ANSN_DEFAULT_FOLDER ) )
+	);
+	echo '<p class="description">Absolute path to the Ars Nova project folder that Claude Desktop should attach to the new task. Leave blank to open a plain new chat with no folder.</p></td></tr>';
+
+	echo '<tr><th scope="row"><label for="ansn_claude_branch">Branch</label></th><td>';
+	printf(
+		'<input name="ansn_claude_branch" id="ansn_claude_branch" type="text" class="regular-text" value="%s" />',
+		esc_attr( get_option( 'ansn_claude_branch', 'Website' ) )
+	);
+	echo '<p class="description">Named at the top of every note sent to Claude so the work is routed to the right handoff. Default: Website.</p></td></tr>';
+
+	echo '<tr><th scope="row"><label for="ansn_site_label">Site label</label></th><td>';
+	printf(
+		'<input name="ansn_site_label" id="ansn_site_label" type="text" class="regular-text" value="%s" placeholder="%s" />',
+		esc_attr( get_option( 'ansn_site_label', '' ) ),
+		esc_attr( $cfg['siteLabel'] )
+	);
+	echo '<p class="description">Shown in the note so it is never ambiguous which site it came from. Left blank, this site is detected as <strong>' . esc_html( $cfg['siteLabel'] ) . '</strong>.</p></td></tr>';
+
+	echo '</tbody></table>';
+	submit_button();
+	echo '</form></div>';
 }
 
 /* -------------------------------------------------------------------------
@@ -203,6 +272,7 @@ add_action( 'wp_enqueue_scripts', function () {
 		'user'      => wp_get_current_user()->display_name,
 		'admin_url' => admin_url( 'admin.php?page=ans-site-notes' ),
 		'context'   => 'frontend',
+		'claude'    => ansn_claude_config(),
 	) );
 } );
 
@@ -220,6 +290,7 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 		'admin_url'  => admin_url( 'admin.php?page=ans-site-notes' ),
 		'context'    => 'admin',
 		'page_title' => wp_strip_all_tags( get_admin_page_title() ),
+		'claude'     => ansn_claude_config(),
 	) );
 } );
 
@@ -241,6 +312,10 @@ add_action( 'admin_menu', function () {
 		'Site Notes', 'Site Notes', ansn_cap(), 'ans-site-notes',
 		'ansn_render_admin_page', 'dashicons-edit-page', 26
 	);
+	add_submenu_page(
+		'ans-site-notes', 'Site Notes Settings', 'Settings', 'manage_options',
+		'ans-site-notes-settings', 'ansn_render_settings_page'
+	);
 } );
 
 add_action( 'admin_enqueue_scripts', function ( $hook ) {
@@ -248,9 +323,10 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 	wp_enqueue_style( 'ansn-admin', ANSN_URL . 'assets/admin.css', array(), ANSN_VERSION );
 	wp_enqueue_script( 'ansn-admin', ANSN_URL . 'assets/admin.js', array(), ANSN_VERSION, true );
 	wp_localize_script( 'ansn-admin', 'ansNotesAdmin', array(
-		'rest'  => esc_url_raw( rest_url( 'ans-notes/v1/' ) ),
-		'nonce' => wp_create_nonce( 'wp_rest' ),
-		'home'  => home_url(),
+		'rest'   => esc_url_raw( rest_url( 'ans-notes/v1/' ) ),
+		'nonce'  => wp_create_nonce( 'wp_rest' ),
+		'home'   => home_url(),
+		'claude' => ansn_claude_config(),
 	) );
 } );
 

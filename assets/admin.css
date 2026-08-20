@@ -26,6 +26,14 @@
 .ansn-a-table .c-elem { width: 160px; }
 .ansn-a-table .c-who { width: 130px; }
 .ansn-a-table .c-when { width: 150px; }
+.ansn-a-table .c-goto { width: 104px; }
+.ansn-a-goto { white-space: nowrap; text-decoration: none; }
+.ansn-a-table .c-claude { width: 96px; }
+.ansn-a-claude {
+	white-space: nowrap; font-weight: 600;
+	border-color: #d9a441 !important; background: #fdf6e7 !important; color: #8a5a00 !important;
+}
+.ansn-a-claude:hover { background: #f7e7c2 !important; border-color: #c08c2a !important; }
 .ansn-a-rowdone td { opacity: 0.6; }
 .ansn-a-rowdone .ansn-a-text { text-decoration: line-through; }
 

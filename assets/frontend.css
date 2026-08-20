@@ -115,7 +115,31 @@
 	color: #787c82; padding: 0 2px;
 }
 .ansn-unlink:hover, .ansn-del:hover { color: #d63638; }
+.ansn-claude {
+	margin-left: auto; font-size: 11px; cursor: pointer; white-space: nowrap;
+	border: 1px solid #d9a441; background: #fdf6e7; color: #8a5a00;
+	padding: 1px 8px; border-radius: 10px; font-weight: 600;
+}
+.ansn-claude:hover { background: #f7e7c2; border-color: #c08c2a; }
 .ansn-completed { margin-top: 5px; font-size: 11px; color: #00866e; }
+
+/* Arriving from the Site Notes review screen: spotlight the note and its element. */
+.ansn-item.ansn-focus {
+	background: #fdf6e7;
+	box-shadow: inset 3px 0 0 #d9a441;
+}
+.ansn-flash {
+	animation: ansn-flash-kf 2.6s ease-out 1;
+	scroll-margin-top: 120px;
+}
+@keyframes ansn-flash-kf {
+	0%   { box-shadow: 0 0 0 3px rgba(214,54,56,.95), 0 0 0 9px rgba(214,54,56,.28); }
+	70%  { box-shadow: 0 0 0 3px rgba(214,54,56,.75), 0 0 0 9px rgba(214,54,56,.18); }
+	100% { box-shadow: 0 0 0 3px rgba(214,54,56,0),   0 0 0 9px rgba(214,54,56,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+	.ansn-flash { animation: none; box-shadow: 0 0 0 3px rgba(214,54,56,.9); }
+}
 
 .ansn-composer { border-bottom: 1px solid #e0e0e0; padding: 10px; background: #fafafa; }
 .ansn-listlabel {

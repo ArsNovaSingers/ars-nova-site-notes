@@ -26,7 +26,12 @@
 	var isAdmin = ( typeof ansNotes.context !== 'undefined' && ansNotes.context === 'admin' );
 	// In wp-admin, include the query string (e.g. ?page=season-dashboard) so notes attach
 	// to the specific admin screen rather than all of /wp-admin/admin.php.
-	var pageUrl = isAdmin ? ( location.pathname + location.search ) : location.pathname;
+	// Strip our own ?ansn_note= marker before keying: on an admin screen the query
+	// string is part of the note key, so leaving it in would match nothing.
+	var cleanSearch = location.search
+		.replace( /([?&])ansn_note=\d+&?/, '$1' )
+		.replace( /[?&]$/, '' );
+	var pageUrl = isAdmin ? ( location.pathname + cleanSearch ) : location.pathname;
 	var pageTitle = ansNotes.page_title ? ansNotes.page_title : document.title;
 	var NOUN = isAdmin ? 'this screen' : 'this page';
 
@@ -44,6 +49,106 @@
 			if ( ! r.ok ) { return r.json().then( function ( e ) { throw e; } ); }
 			return r.json();
 		} );
+	}
+
+	/* ---------- send to Claude Desktop ----------
+	 * Builds a self-contained brief for one note and opens Claude Desktop on a
+	 * new Cowork task with it already in the composer, using the documented
+	 * deep link claude://cowork/new?q=…&folder=…  (see support.claude.com,
+	 * "Open Claude Desktop with a link"). q is truncated at ~14,000 chars by
+	 * the app, which no single note will ever approach.
+	 */
+	var CLAUDE_MAX_Q = 13000;
+
+	function claudeCfg() {
+		return ( ansNotes && ansNotes.claude ) ? ansNotes.claude : {};
+	}
+
+	function absPageUrl( note ) {
+		var cfg = claudeCfg();
+		var base = cfg.home || location.origin;
+		var path = note.page_url || pageUrl;
+		if ( /^https?:\/\//i.test( path ) ) { return path; }
+		return base.replace( /\/+$/, '' ) + path;
+	}
+
+	function claudeBrief( n ) {
+		var cfg   = claudeCfg();
+		var lines = [];
+
+		lines.push( 'Branch: ' + ( cfg.branch || 'Website' ) + ' — Ars Nova site note. Run ans-router, load the' );
+		lines.push( 'matching branch HANDOFF, then handle the note below.' );
+		lines.push( '' );
+		lines.push( 'SITE NOTE #' + n.id + ' · P' + n.priority + ' · ' +
+			( n.type || 'general' ) + ' · ' + ( n.done ? 'Done' : 'Open' ) );
+		lines.push( 'Site:  ' + ( cfg.siteLabel ? cfg.siteLabel + ' — ' : '' ) +
+			( cfg.home || location.origin ) );
+		lines.push( 'Page:  ' + ( n.page_title || pageTitle ) + ' — ' +
+			decodeURIComponent( n.page_url || pageUrl ) );
+		if ( ( n.context || 'frontend' ) === 'admin' ) {
+			lines.push( 'Area:  WP-Admin back-end screen (not a public page)' );
+		}
+		if ( n.element_selector ) {
+			lines.push( 'Element: ' + n.element_selector +
+				( n.element_label ? ' ("' + n.element_label + '")' : '' ) );
+		}
+		lines.push( 'Added by ' + ( n.author || ansNotes.user || 'a site editor' ) +
+			' · ' + ( n.created || '' ) );
+		lines.push( '' );
+		lines.push( 'NOTE' );
+		lines.push( n.text );
+		lines.push( '' );
+		lines.push( 'Page:  ' + absPageUrl( n ) );
+		lines.push( 'Notes: ' + ( cfg.notesUrl || ansNotes.admin_url ) );
+		lines.push( 'When the work is done, mark note #' + n.id + ' done in Site Notes.' );
+
+		return lines.join( '\n' ).slice( 0, CLAUDE_MAX_Q );
+	}
+
+	function claudeUrl( n ) {
+		var cfg = claudeCfg();
+		var q   = encodeURIComponent( claudeBrief( n ) );
+		if ( cfg.folder ) {
+			return 'claude://cowork/new?q=' + q + '&folder=' + encodeURIComponent( cfg.folder );
+		}
+		return 'claude://claude.ai/new?q=' + q;
+	}
+
+	function copyBrief( n, btn ) {
+		var text = claudeBrief( n );
+		var done = function () { flash( btn, 'copied' ); };
+		if ( navigator.clipboard && navigator.clipboard.writeText ) {
+			navigator.clipboard.writeText( text ).then( done, function () { fallbackCopy( text, done ); } );
+		} else {
+			fallbackCopy( text, done );
+		}
+	}
+
+	function fallbackCopy( text, done ) {
+		var ta = document.createElement( 'textarea' );
+		ta.value = text;
+		ta.setAttribute( 'readonly', '' );
+		ta.style.position = 'fixed';
+		ta.style.opacity = '0';
+		document.body.appendChild( ta );
+		ta.select();
+		try { document.execCommand( 'copy' ); done(); } catch ( e ) { showErr( { message: 'Could not copy the note.' } ); }
+		document.body.removeChild( ta );
+	}
+
+	function flash( btn, label ) {
+		if ( ! btn ) { return; }
+		var was = btn.textContent;
+		btn.textContent = label;
+		setTimeout( function () { btn.textContent = was; }, 1400 );
+	}
+
+	function sendToClaude( n, btn, ev ) {
+		// Alt/Option-click copies the brief instead of launching the app — a
+		// fallback for machines where the claude:// handler is not registered.
+		if ( ev && ( ev.altKey || ev.shiftKey ) ) { copyBrief( n, btn ); return; }
+		window.location.href = claudeUrl( n );
+		flash( btn, 'sent →' );
 	}
 
 	/* ---------- element selector capture ---------- */
@@ -273,6 +378,12 @@
 			} ).catch( showErr );
 		};
 		meta.appendChild( del );
+
+		var claude = h( 'button', 'ansn-claude', '→ Claude' );
+		claude.title = 'Open this note in Claude Desktop as a new task' +
+			'\nAlt-click (or Shift-click) to copy the note instead';
+		claude.onclick = function ( ev ) { sendToClaude( n, claude, ev ); };
+		meta.appendChild( claude );
 
 		body.appendChild( meta );
 
@@ -514,9 +625,60 @@
 		drawLine();
 	}
 
+	/* ---------- arriving from the Site Notes review screen ----------
+	 * The admin list links here as ...?ansn_note=<id>. Open the panel, spotlight
+	 * that note, and scroll its linked element into view so the reason you came
+	 * is on screen without hunting for it.
+	 */
+	function requestedNoteId() {
+		var m = /[?&]ansn_note=(\d+)/.exec( location.search );
+		return m ? parseInt( m[ 1 ], 10 ) : 0;
+	}
+
+	function focusNote( id ) {
+		var row = listEl && listEl.querySelector( '.ansn-item[data-id="' + id + '"]' );
+		if ( row ) {
+			row.classList.add( 'ansn-focus' );
+			row.scrollIntoView( { block: 'nearest' } );
+		}
+		var note = state.notes.filter( function ( n ) { return n.id === id; } )[ 0 ];
+		if ( ! note ) {
+			showErr( { message: 'Note #' + id + ' is not on this page any more. It may have been deleted or moved.' } );
+			return;
+		}
+		state.activeId = id;
+
+		var target = findTarget( note.element_selector );
+		if ( target ) {
+			target.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+			target.classList.add( 'ansn-flash' );
+			setTimeout( function () { target.classList.remove( 'ansn-flash' ); }, 2600 );
+			// Redraw once the smooth scroll has settled, or the line points at
+			// where the element used to be.
+			setTimeout( drawLine, 600 );
+		}
+		drawLine();
+	}
+
+	function openFromLink( id ) {
+		if ( ! panel ) { buildPanel(); }
+		state.open = true;
+		panel.style.display = 'flex';
+		load().then( function () { focusNote( id ); } );
+		// Drop the parameter so a refresh doesn't keep re-triggering the jump.
+		if ( window.history && history.replaceState ) {
+			var clean = location.pathname +
+				location.search.replace( /([?&])ansn_note=\d+&?/, '$1' ).replace( /[?&]$/, '' ) +
+				location.hash;
+			history.replaceState( null, '', clean );
+		}
+	}
+
 	/* ---------- boot ---------- */
 	function boot() {
 		countEl = document.getElementById( 'ansn-ab-count' );
+		var wanted = requestedNoteId();
+		if ( wanted ) { openFromLink( wanted ); return; }
 		// preload count badge without opening the panel
 		api( 'notes?page_url=' + encodeURIComponent( pageUrl ) ).then( function ( notes ) {
 			state.notes = notes || [];
